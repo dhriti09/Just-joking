@@ -3,74 +3,114 @@ const jokeBtn = document.getElementById("btn");
 const card = document.querySelector(".glass-card");
 const API_URL = "https://v2.jokeapi.dev/joke/Any?blacklistFlags=nsfw,religious,political,racist,sexist,explicit";
 
-let jokeHistory = [];
-let isProcessing = false;
+let sessionHistory = JSON.parse(localStorage.getItem("joke_cache")) || [];
+let currentJokeState = "";
+let isRequesting = false;
 
-const updateInterface = (loading) => {
-    isProcessing = loading;
-    jokeBtn.disabled = loading;
-    jokeBtn.style.filter = loading ? "grayscale(1)" : "none";
-    jokeBtn.style.cursor = loading ? "not-allowed" : "pointer";
-    jokeBtn.innerText = loading ? "Fetching..." : "Next Joke";
-    
-    if (loading) {
-        card.style.border = "1px solid rgba(99, 102, 241, 0.5)";
-        jokeDisplay.style.filter = "blur(4px)";
-    } else {
-        card.style.border = "1px solid rgba(255, 255, 255, 0.1)";
-        jokeDisplay.style.filter = "none";
+const uiController = {
+    setLoading: (state) => {
+        isRequesting = state;
+        jokeBtn.style.pointerEvents = state ? "none" : "auto";
+        jokeBtn.style.filter = state ? "brightness(0.7) grayscale(0.5)" : "none";
+        jokeBtn.innerHTML = state ? "<span>🔄</span> Syncing..." : "Get New Joke";
+        
+        if (state) {
+            jokeDisplay.style.transform = "scale(0.98)";
+            jokeDisplay.style.filter = "blur(2px)";
+        } else {
+            jokeDisplay.style.transform = "scale(1)";
+            jokeDisplay.style.filter = "none";
+        }
+    },
+    updateCardGlow: (type) => {
+        const colors = {
+            programming: "rgba(99, 102, 241, 0.4)",
+            misc: "rgba(168, 85, 247, 0.4)",
+            default: "rgba(255, 255, 255, 0.1)"
+        };
+        card.style.boxShadow = `0 20px 40px ${colors[type] || colors.default}`;
     }
 };
 
-async function getJoke() {
-    if (isProcessing) return;
-    
-    updateInterface(true);
+const storageManager = {
+    save: (content) => {
+        const entry = {
+            id: Date.now(),
+            text: content,
+            date: new Date().toISOString()
+        };
+        sessionHistory.push(entry);
+        if (sessionHistory.length > 20) sessionHistory.shift();
+        localStorage.setItem("joke_cache", JSON.stringify(sessionHistory));
+    },
+    clear: () => {
+        sessionHistory = [];
+        localStorage.removeItem("joke_cache");
+    }
+};
+
+async function handleJokeRequest() {
+    if (isRequesting) return;
+    uiController.setLoading(true);
 
     try {
-        const response = await fetch(API_URL);
-        const data = await response.json();
+        const res = await fetch(API_URL);
+        const json = await res.json();
 
-        let finalJoke = "";
-        if (data.type === "single") {
-            finalJoke = data.joke;
+        let output = "";
+        if (json.type === "single") {
+            output = json.joke;
         } else {
-            finalJoke = `${data.setup} <br><br> <span style="color: #a855f7; font-weight: 600;">${data.delivery}</span>`;
+            output = `${json.setup} <br><br> <em style="color: #a855f7;">${json.delivery}</em>`;
         }
 
         setTimeout(() => {
-            jokeDisplay.innerHTML = finalJoke;
-            jokeHistory.push({
-                text: finalJoke,
-                timestamp: new Date().toLocaleTimeString()
-            });
+            currentJokeState = output.replace(/<[^>]*>?/gm, '');
+            jokeDisplay.innerHTML = output;
+            uiController.updateCardGlow(json.category.toLowerCase());
+            storageManager.save(currentJokeState);
+            uiController.setLoading(false);
             
-            if (jokeHistory.length > 10) jokeHistory.shift();
-            
-            console.log("Session History:", jokeHistory);
-            updateInterface(false);
-        }, 400);
+            console.log(`Successfully cached joke ID: ${json.id}`);
+        }, 500);
 
     } catch (err) {
-        jokeDisplay.innerText = "Error: Comedian is offline.";
-        updateInterface(false);
+        console.error("Transmission Error:", err);
+        jokeDisplay.innerText = "Connection lost. Please check your internet.";
+        uiController.setLoading(false);
     }
 }
 
-const handleKeyPress = (event) => {
-    if (event.key === "Enter" || event.key.toLowerCase() === "j") {
-        getJoke();
+const copyToClipboard = () => {
+    if (!currentJokeState) return;
+    navigator.clipboard.writeText(currentJokeState).then(() => {
+        const originalText = jokeDisplay.innerHTML;
+        jokeDisplay.innerText = "Copied to clipboard!";
+        setTimeout(() => jokeDisplay.innerHTML = originalText, 1000);
+    });
+};
+
+const handleShortcuts = (e) => {
+    const key = e.key.toLowerCase();
+    if (key === "n" || key === " ") {
+        e.preventDefault();
+        handleJokeRequest();
+    }
+    if (key === "c" && (e.ctrlKey || e.metaKey)) {
+        copyToClipboard();
     }
 };
 
-const initializeApp = () => {
-    getJoke();
-    jokeBtn.addEventListener("click", getJoke);
-    window.addEventListener("keydown", handleKeyPress);
+const applicationBootstrap = () => {
+    handleJokeRequest();
+    jokeBtn.addEventListener("click", handleJokeRequest);
+    window.addEventListener("keydown", handleShortcuts);
     
-    setInterval(() => {
-        console.log("App active for: " + performance.now() + "ms");
-    }, 60000);
+    console.group("App Debug Info");
+    console.log("Memory Cache:", sessionHistory.length);
+    console.log("User Agent:", navigator.userAgent);
+    console.log("Resolution:", `${window.innerWidth}x${window.innerHeight}`);
+    console.groupEnd();
 };
 
-document.addEventListener("DOMContentLoaded", initializeApp);
+document.addEventListener("DOMContentLoaded", applicationBootstrap);
